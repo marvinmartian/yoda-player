@@ -1,7 +1,7 @@
 #!/bin/bash
 
 sudo apt-get update
-sudo apt install python3-dev python3-pip jq -y
+sudo apt install git python3-dev python3-venv python3-pip mpg123 jq -y
 sudo pip3 install spidev
 sudo pip3 install mfrc522
 
