@@ -55,7 +55,7 @@ try:
                     current_process.wait()
 
                 # Construct the command with the starting offset
-                command = [mpg123_path, f'--skip {offset}', mp3_file]
+                command = [mpg123_path, mp3_file]
 
                 try:
                     current_process = subprocess.Popen(command)
