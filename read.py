@@ -19,12 +19,24 @@ stop_rfid_id = controls_data.get("stop_rfid_id", None)
 volume_up_rfid_id = controls_data.get("volume_up_rfid_id", None)
 volume_down_rfid_id = controls_data.get("volume_down_rfid_id", None)
 
+# Function to change the volume using amixer with an increment or decrement of 5%
+def change_volume(volume_direction, audio_card=0, control_name='Speaker'):
+    try:
+        # Determine the volume change direction
+        if volume_direction == 'up':
+            cmd = ['amixer', '-c', str(audio_card), 'set', control_name, '5%+']
+        elif volume_direction == 'down':
+            cmd = ['amixer', '-c', str(audio_card), 'set', control_name, '5%-']
+        else:
+            print("Invalid volume change direction. Use 'up' or 'down'.")
+
+        subprocess.run(cmd)
+    except Exception as e:
+        print(f"An error occurred while changing the volume: {e}")
+
 # Read the RFID IDs and MP3 file data from mp3.json
 with open('mp3.json', 'r') as mp3_file:
     rfid_mp3_mapping = json.load(mp3_file)
-
-# Rest of your code remains the same
-# ...
 
 # Handle KeyboardInterrupt and cleanup
 try:
@@ -41,8 +53,10 @@ try:
         elif id == volume_up_rfid_id:
             print("Volume increased")
             # Add volume increase logic here
+            change_volume('up', audio_card=3)
         elif id == volume_down_rfid_id:
             print("Volume decreased")
+            change_volume('down', audio_card=3)
             # Add volume decrease logic here
         elif str(id) in rfid_mp3_mapping:
             if id != last_read_id:
