@@ -34,6 +34,18 @@ def change_volume(volume_direction, audio_card=0, control_name='Speaker'):
     except Exception as e:
         print(f"An error occurred while changing the volume: {e}")
 
+# Function to play an MP3 file with an offset and buffer size
+def play_mp3(mp3_info, buffer_size):
+    try:
+        mp3_file = mp3_info['file']
+        offset = mp3_info['offset']
+        command = [mpg123_path, f'-k {offset}', f'-b {buffer_size}', mp3_file]
+        print("Executing command:", " ".join(command))
+        return subprocess.Popen(command)
+    except Exception as e:
+        print(f"An error occurred while playing the MP3 file: {e}")
+        return None
+
 # Read the RFID IDs and MP3 file data from mp3.json
 with open('mp3.json', 'r') as mp3_file:
     rfid_mp3_mapping = json.load(mp3_file)
@@ -69,14 +81,8 @@ try:
                     current_process.wait()
 
                 # Construct the command with the starting offset
-                command = [mpg123_path, mp3_file]
+                current_process = play_mp3(mp3_info, buffer_size=4096)
 
-                try:
-                    current_process = subprocess.Popen(command)
-                except FileNotFoundError:
-                    print("mpg123 not found. Make sure it is installed and the path is correctly set.")
-                except Exception as e:
-                    print(f"An error occurred: {e}")
             else:
                 print("Same RFID tag read again, not restarting.")
         else:
