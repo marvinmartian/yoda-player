@@ -27,7 +27,7 @@ jobs:
       
     # Leave 'player' binary as an artifact
     - name: Archive artifact
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v3
       with:
         name: player
         path: ./player/player
