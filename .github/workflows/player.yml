@@ -32,14 +32,13 @@ jobs:
         name: player
         path: ./player/player
 
-    # Create a release
-    # - name: Create Release
-    #   id: create_release
-    #   uses: softprops/action-gh-release@v1
-    #   with:
-    #     files: ./player/player
-    #   env:
-    #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Create Release
+      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.0.1')
+      run: |
+        # You can add any release creation commands here
+        # For example:
+        # Create a release draft
+        gh release create v0.0.1 ./player/player --title "Release v0.0.1" --notes "Release notes for v0.0.1"
 
     # - name: Test
     #   run: go test -v ./...
