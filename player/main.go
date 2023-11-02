@@ -126,7 +126,7 @@ func logRequest(next http.Handler) http.Handler {
 
 func main() {
 	// Load JSON data from the "mp3.json" file
-	jsonDataFile, err := os.ReadFile("mp3.json")
+	jsonDataFile, err := os.ReadFile("../mp3.json")
 	if err != nil {
 		fmt.Println("Error reading JSON file:", err)
 		return
