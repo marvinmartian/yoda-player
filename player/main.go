@@ -78,7 +78,7 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 	defer mu.Unlock()
 
 	if currentID == previousID {
-		fmt.Println("Received the same ID again")
+		fmt.Printf("Received the same ID again. Current ID: %s, Previous ID: %s\n", currentID, previousID)
 		// Reset the timer
 		if timer != nil {
 			timer.Stop()
@@ -105,7 +105,7 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 		filePath, _ := data["file"].(string)
 		offset, ok := data["offset"].(float64)
 		if ok {
-			playMP3(filePath, int(offset))
+			playMP3("../"+filePath, int(offset))
 		} else {
 			fmt.Println("Offset field not found in JSON for ID:", currentID)
 		}
