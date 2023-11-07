@@ -8,30 +8,50 @@ import (
 	"os/exec"
 	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
-	mu         sync.Mutex
-	previousID string
-	timeout    = 8 * time.Second
-	timer      *time.Timer
-	jsonData   map[string]map[string]interface{}
-	isPlaying  bool
+	mu           sync.Mutex
+	lastPlayedID string
+	timeout      = 3500 * time.Millisecond
+	timer        *time.Timer
+	jsonData     map[string]map[string]interface{}
+	isPlaying    bool
+)
+
+// Define a Prometheus Counter to track the number of plays for each track ID.
+var playsCounter = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "track_plays_total",
+		Help: "Total number of plays for each track ID.",
+	},
+	[]string{"track_id"},
 )
 
 type PostData struct {
 	ID string `json:"id"`
 }
 
-func playMP3(filePath string, offset int) {
-	if isPlaying {
-		fmt.Println("Music is already playing.")
+func init() {
+	// Register the Prometheus metrics.
+	prometheus.MustRegister(playsCounter)
+}
+
+func playMP3(filePath string, offset int, currentID string) {
+	if isPlaying && currentID == lastPlayedID {
+		fmt.Println("This track is already playing.")
 		return
+	} else if isPlaying {
+		fmt.Println("Music is already playing, but starting new track.")
+		stopMP3()
 	}
 
 	isPlaying = true
 
-	cmd := exec.Command("mpg123", fmt.Sprintf("-k %d", offset), filePath)
+	cmd := exec.Command("mpg123", "-q", "-b", "512", fmt.Sprintf("-k %d", offset), filePath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -53,6 +73,7 @@ func stopMP3() {
 		if err != nil {
 			fmt.Println("Error stopping MP3:", err)
 		}
+		isPlaying = false
 	}
 }
 
@@ -77,15 +98,29 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if currentID == previousID {
-		fmt.Printf("Received the same ID again. Current ID: %s, Previous ID: %s\n", currentID, previousID)
-		// Reset the timer
-		if timer != nil {
-			timer.Stop()
+	// Check if something is playing now
+	if isPlaying {
+		if currentID != lastPlayedID {
+			// If something is already playing, and it's not the same as the incoming ID
+			fmt.Printf("Stopping the previous track (ID: %s) and starting the new track (ID: %s)\n", lastPlayedID, currentID)
+			stopMP3()
+			lastPlayedID = currentID
+		} else {
+			// If the same ID is requested again
+			fmt.Printf("Received the same ID again (ID: %s). Current track remains unchanged.\n", currentID)
+			// Reset the timer
+			if timer != nil {
+				timer.Stop()
+			}
 		}
 	} else {
-		previousID = currentID
+		// If nothing is playing, start playing the song
+		fmt.Printf("Starting to play the track (ID: %s)\n", currentID)
+		lastPlayedID = currentID
 	}
+
+	// Increment the playsCounter metric for the current track ID.
+	playsCounter.WithLabelValues(currentID).Inc()
 
 	// Start or reset the timer
 	if timer != nil {
@@ -105,7 +140,10 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 		filePath, _ := data["file"].(string)
 		offset, ok := data["offset"].(float64)
 		if ok {
-			playMP3("../"+filePath, int(offset))
+			if isPlaying == true {
+				fmt.Println("")
+			}
+			playMP3("../"+filePath, int(offset), currentID)
 		} else {
 			fmt.Println("Offset field not found in JSON for ID:", currentID)
 		}
@@ -142,6 +180,9 @@ func main() {
 
 	// Define the route and handler for /play
 	router.HandleFunc("/play", playHandler)
+
+	// Define a new route for Prometheus metrics
+	router.Handle("/metrics", promhttp.Handler())
 
 	// Create a handler chain with the request logger
 	chain := http.Handler(logRequest(router))
