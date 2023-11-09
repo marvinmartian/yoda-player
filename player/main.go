@@ -14,12 +14,15 @@ import (
 )
 
 var (
-	mu           sync.Mutex
-	lastPlayedID string
-	timeout      = 3500 * time.Millisecond
-	timer        *time.Timer
-	jsonData     map[string]map[string]interface{}
-	isPlaying    bool
+	mu             sync.Mutex
+	lastPlayedID   string
+	timeout        = 3500 * time.Millisecond
+	timeoutTimer   *time.Timer
+	jsonData       map[string]map[string]interface{}
+	isPlaying      bool
+	canStartTrack  bool = true
+	canPlayTimer   *time.Timer
+	canPlayTimeout = 5 * time.Second
 )
 
 // Define a Prometheus Counter to track the number of plays for each track ID.
@@ -109,46 +112,74 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 			// If the same ID is requested again
 			fmt.Printf("Received the same ID again (ID: %s). Current track remains unchanged.\n", currentID)
 			// Reset the timer
-			if timer != nil {
-				timer.Stop()
+			if timeoutTimer != nil {
+				timeoutTimer.Stop()
 			}
+			// Start or reset the timer
+			if canPlayTimer != nil {
+				// fmt.Println("reset canPlayTimer")
+				canPlayTimer.Reset(canPlayTimeout)
+			}
+
 		}
 	} else {
-		// If nothing is playing, start playing the song
-		fmt.Printf("Starting to play the track (ID: %s)\n", currentID)
-		lastPlayedID = currentID
-	}
 
-	// Increment the playsCounter metric for the current track ID.
-	playsCounter.WithLabelValues(currentID).Inc()
-
-	// Start or reset the timer
-	if timer != nil {
-		timer.Stop()
-	}
-	timer = time.AfterFunc(timeout, func() {
-		mu.Lock()
-		defer mu.Unlock()
-
-		// Stop playing if the timeout is reached
-		fmt.Println("Timeout reached. Stopping play...")
-		stopMP3()
-	})
-
-	// Check if the currentID exists in the JSON data
-	if data, ok := jsonData[currentID]; ok {
-		filePath, _ := data["file"].(string)
-		offset, ok := data["offset"].(float64)
-		if ok {
-			if isPlaying == true {
-				fmt.Println("")
-			}
-			playMP3("../"+filePath, int(offset), currentID)
+		// Start or reset the timer
+		if canPlayTimer != nil {
+			// fmt.Println("reset canPlayTimer")
+			canPlayTimer.Reset(canPlayTimeout)
 		} else {
-			fmt.Println("Offset field not found in JSON for ID:", currentID)
+			canPlayTimer = time.AfterFunc(canPlayTimeout, func() {
+				mu.Lock()
+				defer mu.Unlock()
+
+				// Allow playing again
+				fmt.Println("canPlayTimer timeout reached. Allowing play again")
+				canStartTrack = true
+			})
 		}
-	} else {
-		fmt.Println("ID not found in JSON:", currentID)
+
+		if canStartTrack {
+
+			// If nothing is playing, start playing the song
+			fmt.Printf("Starting to play the track (ID: %s)\n", currentID)
+			lastPlayedID = currentID
+
+			// Increment the playsCounter metric for the current track ID.
+			playsCounter.WithLabelValues(currentID).Inc()
+
+			// Start or reset the timer
+			if timeoutTimer != nil {
+				timeoutTimer.Stop()
+			}
+			timeoutTimer = time.AfterFunc(timeout, func() {
+				mu.Lock()
+				defer mu.Unlock()
+
+				// Stop playing if the timeout is reached
+				fmt.Println("Timeout reached. Stopping play...")
+				stopMP3()
+			})
+
+			// Check if the currentID exists in the JSON data
+			if data, ok := jsonData[currentID]; ok {
+				filePath, _ := data["file"].(string)
+				offset, ok := data["offset"].(float64)
+				if ok {
+					if isPlaying {
+						fmt.Println("")
+					}
+
+					playMP3("../"+filePath, int(offset), currentID)
+					canStartTrack = false
+
+				} else {
+					fmt.Println("Offset field not found in JSON for ID:", currentID)
+				}
+			} else {
+				fmt.Println("ID not found in JSON:", currentID)
+			}
+		}
 	}
 
 	fmt.Fprintln(w, "Data received and printed to console") // Respond to the client
@@ -157,12 +188,13 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 func logRequest(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Log the incoming request
-		fmt.Printf("Received request: %s %s\n", r.Method, r.URL.Path)
+		// fmt.Printf("Received request: %s %s\n", r.Method, r.URL.Path)
 		next.ServeHTTP(w, r)
 	})
 }
 
 func main() {
+
 	// Load JSON data from the "mp3.json" file
 	jsonDataFile, err := os.ReadFile("../mp3.json")
 	if err != nil {
