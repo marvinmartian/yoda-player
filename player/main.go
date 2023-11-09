@@ -136,6 +136,7 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 				// Allow playing again
 				fmt.Println("canPlayTimer timeout reached. Allowing play again")
 				canStartTrack = true
+				stopMP3()
 			})
 		}
 
