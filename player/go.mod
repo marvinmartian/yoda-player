@@ -5,6 +5,7 @@ go 1.21.3
 require (
 	github.com/bogem/id3v2 v1.2.0
 	github.com/prometheus/client_golang v1.17.0
+	github.com/tcolgate/mp3 v0.0.0-20170426193717-e79c5a46d300
 )
 
 require (

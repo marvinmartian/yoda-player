@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -13,11 +14,13 @@ import (
 	"github.com/bogem/id3v2"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/tcolgate/mp3"
 )
 
 var (
 	mu             sync.Mutex
 	lastPlayedID   string
+	lastStartTime  time.Time
 	timeout        = 3500 * time.Millisecond
 	timeoutTimer   *time.Timer
 	jsonData       map[string]map[string]interface{}
@@ -63,6 +66,49 @@ func init() {
 		playsCounter,
 		podcastCounter,
 	)
+}
+
+// Function to set the start time
+func setStartTime() time.Time {
+	startTime := time.Now()
+	fmt.Println("Start time set:", startTime)
+	return startTime
+}
+
+// Function to get the duration since the start time
+func durationSinceStart(startTime time.Time) time.Duration {
+	return time.Since(startTime)
+}
+
+func getFramecount(track string) (float64, int) {
+	t := 0.0
+	frameCount := 0
+
+	r, err := os.Open(track)
+	if err != nil {
+		fmt.Println(err)
+		return 0, 0
+	}
+
+	d := mp3.NewDecoder(r)
+	var f mp3.Frame
+	skipped := 0
+
+	for {
+
+		if err := d.Decode(&f, &skipped); err != nil {
+			if err == io.EOF {
+				break
+			}
+			fmt.Println(err)
+			return 0, 0
+		}
+		// fmt.Println(f.Header().BitRate())
+		t = t + f.Duration().Seconds()
+		frameCount++
+	}
+
+	return t, frameCount
 }
 
 func readID3(filepath string) mp3Data {
@@ -152,7 +198,9 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 			lastPlayedID = currentID
 		} else {
 			// If the same ID is requested again
-			fmt.Printf("Received the same ID again (ID: %s). Current track remains unchanged.\n", currentID)
+			// fmt.Printf("Received the same ID again (ID: %s). Current track remains unchanged.\n", currentID)
+			durationSince := durationSinceStart(lastStartTime)
+			fmt.Println("durationSinceStart:", durationSince.Seconds())
 			// Reset the timer
 			if timeoutTimer != nil {
 				timeoutTimer.Stop()
@@ -211,6 +259,16 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 					}
 					trackPath := "../" + filePath
 					id3_info := readID3(trackPath)
+					lastStartTime = setStartTime()
+					go func() {
+						// Call the function with the track path
+						duration, count := getFramecount(trackPath)
+
+						// Print the results
+						fmt.Printf("Duration=%.2f seconds, Frame count=%d\n", duration, count)
+					}()
+					// duration, frames := getFramecount(trackPath)
+					// fmt.Printf("frames: %d - duration %f seconds", frames, duration)
 					// Increment the playsCounter metric for the current track ID.
 					playsCounter.WithLabelValues(currentID, id3_info.EpisodeTitle).Inc()
 					podcastCounter.WithLabelValues(id3_info.PodcastTitle).Inc()
