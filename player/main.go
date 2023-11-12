@@ -3,12 +3,14 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"sync"
 	"time"
 
+	"github.com/bogem/id3v2"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -25,22 +27,62 @@ var (
 	canPlayTimeout = 5 * time.Second
 )
 
-// Define a Prometheus Counter to track the number of plays for each track ID.
-var playsCounter = prometheus.NewCounterVec(
-	prometheus.CounterOpts{
-		Name: "track_plays_total",
-		Help: "Total number of plays for each track ID.",
-	},
-	[]string{"track_id"},
+var (
+	// Define a Prometheus CounterVec to track the number of plays for each track ID and name.
+	playsCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "track_plays_total",
+			Help: "Total number of plays for each track ID.",
+		},
+		[]string{"track_id", "track_name"},
+	)
+
+	// Define a Prometheus Counter for a podcast plays.
+	podcastCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "podcast_plays",
+			Help: "A counter for the number of times a particular podcast is played.",
+		},
+		[]string{"episode_title"},
+	)
 )
 
 type PostData struct {
 	ID string `json:"id"`
 }
 
+type mp3Data struct {
+	EpisodeTitle string
+	Author       string
+	PodcastTitle string
+}
+
 func init() {
 	// Register the Prometheus metrics.
-	prometheus.MustRegister(playsCounter)
+	prometheus.MustRegister(
+		playsCounter,
+		podcastCounter,
+	)
+}
+
+func readID3(filepath string) mp3Data {
+	fmt.Println(filepath)
+	tag, err := id3v2.Open(filepath, id3v2.Options{Parse: true})
+	if err != nil {
+		log.Fatal("Error while opening mp3 file: ", err)
+	}
+	defer tag.Close()
+
+	// Create an instance of mp3Data and populate its fields from the ID3 tag
+	data := mp3Data{
+		EpisodeTitle: tag.Title(),
+		Author:       tag.Artist(),
+		PodcastTitle: tag.Album(),
+	}
+
+	// fmt.Println(tag.Artist())
+	// fmt.Println(data)
+	return data
 }
 
 func playMP3(filePath string, offset int, currentID string) {
@@ -54,7 +96,7 @@ func playMP3(filePath string, offset int, currentID string) {
 
 	isPlaying = true
 
-	cmd := exec.Command("mpg123", "-q", "-b", "512", fmt.Sprintf("-k %d", offset), filePath)
+	cmd := exec.Command("mpg123", "-q", "-b", "1024", fmt.Sprintf("-k %d", offset), filePath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -146,9 +188,6 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 			fmt.Printf("Starting to play the track (ID: %s)\n", currentID)
 			lastPlayedID = currentID
 
-			// Increment the playsCounter metric for the current track ID.
-			playsCounter.WithLabelValues(currentID).Inc()
-
 			// Start or reset the timer
 			if timeoutTimer != nil {
 				timeoutTimer.Stop()
@@ -170,8 +209,13 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 					if isPlaying {
 						fmt.Println("")
 					}
+					trackPath := "../" + filePath
+					id3_info := readID3(trackPath)
+					// Increment the playsCounter metric for the current track ID.
+					playsCounter.WithLabelValues(currentID, id3_info.EpisodeTitle).Inc()
+					podcastCounter.WithLabelValues(id3_info.PodcastTitle).Inc()
 
-					playMP3("../"+filePath, int(offset), currentID)
+					playMP3(trackPath, int(offset), currentID)
 					canStartTrack = false
 
 				} else {
