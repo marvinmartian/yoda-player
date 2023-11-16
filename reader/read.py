@@ -63,7 +63,7 @@ def detectResetIntent(tagID):
     count=0
     for index in range(len(tagHistory[tagID])):
         if time.mktime(tagHistory[tagID][index]) > floorTime:
-            count++
+            count+=1
     if count>=INTENT_RATE:
         return True
     return False
