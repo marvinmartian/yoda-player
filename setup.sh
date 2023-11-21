@@ -12,6 +12,8 @@ pip3 install -r requirements.txt
 # sudo pip3 install mfrc522
 # sudo pip3 install systemd-python
 
+# Turn SPI on
+echo "dtparam=spi=on" | sudo tee -a /boot/config.txt
 
 
 git clone https://github.com/waveshare/WM8960-Audio-HAT
