@@ -1,3 +1,5 @@
 spidev
 mfrc522
 requests
+systemd
+systemd-python
