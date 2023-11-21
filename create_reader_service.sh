@@ -10,7 +10,7 @@ After=network.target go-music-player.service
 Wants=go-music-player.service
 
 [Service]
-ExecStart=$CURRENT_DIR/.venv/bin/python $CURRENT_DIR/reader/read.py
+ExecStart=$CURRENT_DIR/venv/bin/python $CURRENT_DIR/reader/read.py
 WorkingDirectory=$CURRENT_DIR/reader/
 User=melvin
 Group=melvin
