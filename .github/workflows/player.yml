@@ -38,5 +38,4 @@ jobs:
           prerelease: true
           title: "Development Build"
           files: |
-            LICENSE.txt
-            *.jar
+            go_player
