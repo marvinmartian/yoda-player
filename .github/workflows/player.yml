@@ -5,29 +5,38 @@ name: Go
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
-
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.21.3'
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.21.3"
 
-    - name: Build
-      run: GOOS=linux GOARCH=arm GOARM=7 go build -o go_player -v ./...
-      working-directory: ./player
-      
-    # Leave 'player' binary as an artifact
-    - name: Archive artifact
-      uses: actions/upload-artifact@v3
-      with:
-        name: go_player
-        path: ./player/go_player
+      - name: Build
+        run: GOOS=linux GOARCH=arm GOARM=7 go build -o go_player -v ./...
+        working-directory: ./player
+
+      # Leave 'player' binary as an artifact
+      - name: Archive artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: go_player
+          path: ./player/go_player
+
+      - uses: "marvinpinto/action-automatic-releases@latest"
+        with:
+          repo_token: "${{ secrets.GITHUB_TOKEN }}"
+          automatic_release_tag: "latest"
+          prerelease: true
+          title: "Development Build"
+          files: |
+            LICENSE.txt
+            *.jar
