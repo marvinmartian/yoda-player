@@ -1,5 +1,5 @@
 spidev
-mfrc522
+git+https://github.com/marvinmartian/MFRC522-python.git
 requests
 systemd
 systemd-python
