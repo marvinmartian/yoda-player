@@ -18,16 +18,17 @@ import (
 )
 
 var (
-	mu             sync.Mutex
-	lastPlayedID   string
-	lastStartTime  time.Time
-	timeout        = 3500 * time.Millisecond
-	timeoutTimer   *time.Timer
-	jsonData       map[string]map[string]interface{}
-	isPlaying      bool
-	canStartTrack  bool = true
-	canPlayTimer   *time.Timer
-	canPlayTimeout = 5 * time.Second
+	mu                sync.Mutex
+	lastPlayedID      string
+	lastStartTime     time.Time
+	timeout           = 3500 * time.Millisecond
+	timeoutTimer      *time.Timer
+	jsonData          map[string]map[string]interface{}
+	isPlaying         bool
+	allow_play_resume bool = false
+	canStartTrack     bool = true
+	canPlayTimer      *time.Timer
+	canPlayTimeout    = 5 * time.Second
 )
 
 var (
@@ -48,6 +49,22 @@ var (
 		},
 		[]string{"episode_title"},
 	)
+
+	// Define a Prometheus Counter for tracking the number of errors.
+	playErrorsCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "play_errors_total",
+			Help: "Total number of play errors.",
+		},
+	)
+
+	trackDuration = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "track_play_duration",
+			Help: "Track the total amount of time played in seconds",
+		},
+		[]string{"track_id"},
+	)
 )
 
 type PostData struct {
@@ -60,11 +77,25 @@ type mp3Data struct {
 	PodcastTitle string
 }
 
+type Track struct {
+	Duration  float64 // Duration of the track in seconds (you can change the data type based on your requirements).
+	TrackName string  // Name of the track.
+}
+
+// Message represents the structure of the JSON message
+type SocketMessage struct {
+	Text string `json:"text"`
+}
+
+var tracks = make(map[string]Track)
+
 func init() {
 	// Register the Prometheus metrics.
 	prometheus.MustRegister(
 		playsCounter,
 		podcastCounter,
+		playErrorsCounter,
+		trackDuration,
 	)
 }
 
@@ -89,6 +120,7 @@ func getFramecount(track string) (float64, int) {
 		fmt.Println(err)
 		return 0, 0
 	}
+	defer r.Close()
 
 	d := mp3.NewDecoder(r)
 	var f mp3.Frame
@@ -132,6 +164,7 @@ func readID3(filepath string) mp3Data {
 }
 
 func playMP3(filePath string, offset int, currentID string) {
+	stopMP3()
 	if isPlaying && currentID == lastPlayedID {
 		fmt.Println("This track is already playing.")
 		return
@@ -153,6 +186,8 @@ func playMP3(filePath string, offset int, currentID string) {
 		err := cmd.Run()
 		if err != nil {
 			fmt.Println("Error playing MP3:", err)
+			playErrorsCounter.Inc()
+			// os.Exit(1)
 		}
 	}()
 }
@@ -165,6 +200,36 @@ func stopMP3() {
 			fmt.Println("Error stopping MP3:", err)
 		}
 		isPlaying = false
+	}
+}
+
+func updateTrackPlayInfo(track string, duration float64) {
+	// fmt.Printf("Update Track Play Info\n")
+
+	// Add/Update the duration of the existing track
+	tracks[track] = Track{Duration: duration, TrackName: track}
+	// fmt.Printf("Track %s updated with new duration: %f seconds\n", track, duration)
+}
+
+func getTrackPlayInfo(track string) Track {
+	// fmt.Printf("Get Track Play Info\n")
+	// Attempt to get the track from the map
+	trackInfo, found := tracks[track]
+
+	// Check if the track was found
+	if !found {
+		fmt.Printf("Track not found: %s\n", track)
+	}
+	return trackInfo
+}
+
+func getTrackFromID(id string) (Track, bool) {
+	if data, ok := jsonData[id]; ok {
+		filePath, _ := data["file"].(string)
+		offset := data["offset"].(float64)
+		return Track{Duration: offset, TrackName: filePath}, true
+	} else {
+		return Track{}, false
 	}
 }
 
@@ -200,7 +265,15 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 			// If the same ID is requested again
 			// fmt.Printf("Received the same ID again (ID: %s). Current track remains unchanged.\n", currentID)
 			durationSince := durationSinceStart(lastStartTime)
-			fmt.Println("durationSinceStart:", durationSince.Seconds())
+			// fmt.Println("durationSinceStart:", durationSince.Seconds())
+			updateTrackPlayInfo(currentID, durationSince.Seconds())
+			trackDuration.WithLabelValues(currentID).Add(durationSince.Seconds())
+			// trackInfo, ok := getTrackFromID(currentID)
+			// if ok {
+			// 	length, frameCount := getFramecount(trackInfo.TrackName)
+			// 	fmt.Printf("Track: %s - Duration: %f ", trackInfo.TrackName, trackInfo.Duration)
+			// 	fmt.Printf("Frames: %d - Length: %f ", frameCount, length)
+			// }
 			// Reset the timer
 			if timeoutTimer != nil {
 				timeoutTimer.Stop()
@@ -257,7 +330,7 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 					if isPlaying {
 						fmt.Println("")
 					}
-					trackPath := "../" + filePath
+					trackPath := filePath
 					id3_info := readID3(trackPath)
 					lastStartTime = setStartTime()
 					go func() {
@@ -266,15 +339,27 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 
 						// Print the results
 						fmt.Printf("Duration=%.2f seconds, Frame count=%d\n", duration, count)
+
+						playsCounter.WithLabelValues(currentID, id3_info.EpisodeTitle).Inc()
+						podcastCounter.WithLabelValues(id3_info.PodcastTitle).Inc()
+
+						padded_offset := 0
+						if allow_play_resume {
+							playInfo := getTrackPlayInfo(currentID)
+							// fmt.Printf("getTrackPlayInfo.Duration: %f \n", playInfo.Duration)
+							frames_per_second := count / int(duration)
+							// fmt.Println(frames_per_second)
+							padded_offset = frames_per_second * int(playInfo.Duration)
+							// fmt.Println(padded_offset)
+
+						}
+
+						playMP3(trackPath, int(offset)+padded_offset, currentID)
+						canStartTrack = false
 					}()
 					// duration, frames := getFramecount(trackPath)
 					// fmt.Printf("frames: %d - duration %f seconds", frames, duration)
 					// Increment the playsCounter metric for the current track ID.
-					playsCounter.WithLabelValues(currentID, id3_info.EpisodeTitle).Inc()
-					podcastCounter.WithLabelValues(id3_info.PodcastTitle).Inc()
-
-					playMP3(trackPath, int(offset), currentID)
-					canStartTrack = false
 
 				} else {
 					fmt.Println("Offset field not found in JSON for ID:", currentID)
@@ -328,4 +413,5 @@ func main() {
 	if err != nil {
 		fmt.Println("Error:", err)
 	}
+
 }
