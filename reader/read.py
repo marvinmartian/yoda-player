@@ -21,6 +21,7 @@ tagHistory = {}
 
 def cardRead(tagID,tagText):
     systemd.journal.send(f"Tag ID: {tagID}")
+    print(f"Tag ID: {tagID}")
     updateTagHistory(tagID)
     if detectResetIntent(tagID):
         systemd.journal.send(f"Tag {tagID} playback reset request")
@@ -44,11 +45,16 @@ def yodaPlay(tagID):
             time.sleep(YODA_TIMEOUT_RETRY)  # Wait for a moment before retrying
 
 def updateTagHistory(tagID):
-    if not tagID in tagHistory:
-        tagHistory[tagID] = [time.struct_time]*HISTORY_DEPTH
+    # if not tagID in tagHistory:
+    #     tagHistory[tagID] = [time.struct_time]*HISTORY_DEPTH
+    # systemd.journal.send(f"updateTagHistory - tagID {tagID}")
+    if tagID not in tagHistory:
+        tagHistory[tagID] = [None] * HISTORY_DEPTH
+
     insertIndex = 0
     insertTime = time.gmtime()
     oldest = time.mktime(insertTime)
+
     for index in range(len(tagHistory[tagID])):
         if not isinstance(tagHistory[tagID][index], time.struct_time):
             insertIndex = index
@@ -56,25 +62,44 @@ def updateTagHistory(tagID):
         if time.mktime(tagHistory[tagID][index]) < oldest:
             oldest = time.mktime(tagHistory[tagID][index])
             insertIndex = index
+
     tagHistory[tagID][insertIndex] = insertTime
 
 def detectResetIntent(tagID):
-    floorTime=time.gmtime()-10
-    count=0
+    if tagID not in tagHistory:
+        return False  # or handle this case as needed
+
+    # print(f"tagHistory[{tagID}]: {tagHistory[tagID]}")
+
+    floorTime = time.mktime(time.gmtime()) - 10
+    # systemd.journal.send(f"floorTime: {floorTime}")
+    count = 0
     for index in range(len(tagHistory[tagID])):
+        # print(f"index: {index}, timestamp: {tagHistory[tagID][index]}")
+        if not isinstance(tagHistory[tagID][index], time.struct_time):
+            # print(f"Unexpected type at tagHistory[{tagID}][{index}]: {type(tagHistory[tagID][index])}")
+            # handle this case as needed, e.g., skip the index
+            continue
         if time.mktime(tagHistory[tagID][index]) > floorTime:
-            count++
-    if count>=INTENT_RATE:
+            count += 1
+
+    # systemd.journal.send(f"count: {count}")
+    if count >= INTENT_RATE:
         return True
     return False
 
 
-while True:
-    try:
-        systemd.journal.send("Place an RFID tag near the reader...")
-        id, text = reader.read()
-        cardRead(id, text)
-        time.sleep(2)
-    except KeyboardInterrupt:
-        GPIO.cleanup()
-        break
+def main():
+    while True:
+        try:
+            systemd.journal.send("Place an RFID tag near the reader...")
+            id, text = reader.read()
+            cardRead(id, text)
+            time.sleep(1)
+        except KeyboardInterrupt:
+            # client_socket.close()
+            GPIO.cleanup()
+            break
+
+if __name__ == "__main__":
+    main()
