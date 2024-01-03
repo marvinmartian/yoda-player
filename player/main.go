@@ -249,7 +249,7 @@ func playHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	currentID := postData.ID
-	fmt.Println("Received a POST request to /play with data:", currentID)
+	// fmt.Println("Received a POST request to /play with data:", currentID)
 
 	mu.Lock()
 	defer mu.Unlock()
