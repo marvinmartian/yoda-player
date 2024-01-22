@@ -4,32 +4,28 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
-	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
-	"github.com/bogem/id3v2"
 	"github.com/marvinmartian/yoda-player/internal/player"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/tcolgate/mp3"
 )
 
 var (
-	mu                sync.Mutex
-	lastPlayedID      string
-	lastStartTime     time.Time
-	timeout           = 3500 * time.Millisecond
-	timeoutTimer      *time.Timer
-	jsonData          map[string]map[string]interface{}
-	isPlaying         bool
-	allow_play_resume bool = false
-	canStartTrack     bool = true
-	canPlayTimer      *time.Timer
-	canPlayTimeout    = 5 * time.Second
+	mu             sync.Mutex
+	lastPlayedID   string
+	lastStartTime  time.Time
+	timeout        = 3500 * time.Millisecond
+	timeoutTimer   *time.Timer
+	jsonData       map[string]map[string]interface{}
+	isPlaying      bool
+	canStartTrack  bool = true
+	canPlayTimer   *time.Timer
+	canPlayTimeout = 5 * time.Second
 )
 
 var (
@@ -39,7 +35,7 @@ var (
 			Name: "track_plays_total",
 			Help: "Total number of plays for each track ID.",
 		},
-		[]string{"track_id", "track_name"},
+		[]string{"track_id", "track_name", "track_artist"},
 	)
 
 	// Define a Prometheus Counter for a podcast plays.
@@ -70,12 +66,6 @@ var (
 
 type PostData struct {
 	ID string `json:"id"`
-}
-
-type mp3Data struct {
-	EpisodeTitle string
-	Author       string
-	PodcastTitle string
 }
 
 type Track struct {
@@ -113,66 +103,19 @@ func setStartTime() time.Time {
 }
 
 // Function to get the duration since the start time
+// func durationSinceStart(startTime time.Time, playedDuration float64) time.Duration {
+// 	// Add the played duration to the original startTime
+// 	newStartTime := startTime.Add(time.Duration(playedDuration * float64(time.Second)))
+
+// 	// Calculate the duration since the updated startTime
+// 	return time.Since(newStartTime)
+// }
+
 func durationSinceStart(startTime time.Time) time.Duration {
 	return time.Since(startTime)
 }
 
-func getFramecount(track string) (float64, int) {
-	t := 0.0
-	frameCount := 0
-
-	r, err := os.Open("/var/lib/mpd/music/" + track)
-	if err != nil {
-		fmt.Println(err)
-		return 0, 0
-	}
-	defer r.Close()
-
-	d := mp3.NewDecoder(r)
-	var f mp3.Frame
-	skipped := 0
-
-	for {
-
-		if err := d.Decode(&f, &skipped); err != nil {
-			if err == io.EOF {
-				break
-			}
-			fmt.Println(err)
-			return 0, 0
-		}
-		// fmt.Println(f.Header().BitRate())
-		t = t + f.Duration().Seconds()
-		frameCount++
-	}
-
-	return t, frameCount
-}
-
-func readID3(filepath string, p *player.Player) mp3Data {
-	fmt.Println(filepath)
-	fmt.Println(p.CurrentSong())
-	// os.Exit(1)
-	tag, err := id3v2.Open("/var/lib/mpd/music/"+filepath, id3v2.Options{Parse: true})
-	if err != nil {
-		log.Fatal("Error while opening mp3 file: ", err)
-	}
-	defer tag.Close()
-
-	// Create an instance of mp3Data and populate its fields from the ID3 tag
-	data := mp3Data{
-		EpisodeTitle: tag.Title(),
-		Author:       tag.Artist(),
-		PodcastTitle: tag.Album(),
-	}
-
-	// fmt.Println(tag.Artist())
-	// fmt.Println(data)
-	return data
-}
-
 func playMP3(player *player.Player, filePath string, offset int, currentID string) {
-	// player.St
 	stopMP3(player)
 	if isPlaying && currentID == lastPlayedID {
 		fmt.Println("This track is already playing.")
@@ -194,22 +137,6 @@ func playMP3(player *player.Player, filePath string, offset int, currentID strin
 			fmt.Println(seekErr)
 		}
 	}
-
-	// cmd := exec.Command("mpg123", "-q", "-b", "1024", fmt.Sprintf("-k %d", offset), filePath)
-	// cmd.Stdout = os.Stdout
-	// cmd.Stderr = os.Stderr
-
-	// go func() {
-	// 	defer func() {
-	// 		isPlaying = false
-	// 	}()
-	// 	err := cmd.Run()
-	// 	if err != nil {
-	// 		fmt.Println("Error playing MP3:", err)
-	// 		playErrorsCounter.Inc()
-	// 		// os.Exit(1)
-	// 	}
-	// }()
 }
 
 func stopMP3(player *player.Player) {
@@ -217,11 +144,8 @@ func stopMP3(player *player.Player) {
 		// If music is playing, stop it
 		player.Stop()
 		player.Clear()
-		// err := exec.Command("pkill", "mpg123").Run()
-		// if err != nil {
-		// 	fmt.Println("Error stopping MP3:", err)
-		// }
 		isPlaying = false
+		lastPlayedID = "0"
 	}
 }
 
@@ -231,28 +155,6 @@ func updateTrackPlayInfo(track string, duration float64) {
 	// Add/Update the duration of the existing track
 	tracks[track] = Track{Duration: duration, TrackName: track}
 	// fmt.Printf("Track %s updated with new duration: %f seconds\n", track, duration)
-}
-
-func getTrackPlayInfo(track string) Track {
-	// fmt.Printf("Get Track Play Info\n")
-	// Attempt to get the track from the map
-	trackInfo, found := tracks[track]
-
-	// Check if the track was found
-	if !found {
-		fmt.Printf("Track not found: %s\n", track)
-	}
-	return trackInfo
-}
-
-func getTrackFromID(id string) (Track, bool) {
-	if data, ok := jsonData[id]; ok {
-		filePath, _ := data["file"].(string)
-		offset := data["offset"].(float64)
-		return Track{Duration: offset, TrackName: filePath}, true
-	} else {
-		return Track{}, false
-	}
 }
 
 func playHandler(player *player.Player) http.HandlerFunc {
@@ -279,6 +181,7 @@ func playHandler(player *player.Player) http.HandlerFunc {
 
 		// Check if something is playing now
 		if isPlaying {
+			playStats, _ := player.Status()
 			if currentID != lastPlayedID {
 				// If something is already playing, and it's not the same as the incoming ID
 				fmt.Printf("Stopping the previous track (ID: %s) and starting the new track (ID: %s)\n", lastPlayedID, currentID)
@@ -287,16 +190,24 @@ func playHandler(player *player.Player) http.HandlerFunc {
 			} else {
 				// If the same ID is requested again
 				// fmt.Printf("Received the same ID again (ID: %s). Current track remains unchanged.\n", currentID)
+
+				elapsedStr, ok := playStats["elapsed"]
+				elapsed := 0.0
+				if ok {
+					elapsed, err = strconv.ParseFloat(elapsedStr, 64)
+					if err != nil {
+						fmt.Println("Error converting elapsed to float64:", err)
+						return
+					}
+					fmt.Printf("Elapsed: %f\n", elapsed)
+				} else {
+					fmt.Println("Elapsed not found")
+					fmt.Println(playStats)
+				}
 				durationSince := durationSinceStart(lastStartTime)
 				// fmt.Println("durationSinceStart:", durationSince.Seconds())
 				updateTrackPlayInfo(currentID, durationSince.Seconds())
 				trackDuration.WithLabelValues(currentID).Add(durationSince.Seconds())
-				// trackInfo, ok := getTrackFromID(currentID)
-				// if ok {
-				// 	length, frameCount := getFramecount(trackInfo.TrackName)
-				// 	fmt.Printf("Track: %s - Duration: %f ", trackInfo.TrackName, trackInfo.Duration)
-				// 	fmt.Printf("Frames: %d - Length: %f ", frameCount, length)
-				// }
 				// Reset the timer
 				if timeoutTimer != nil {
 					timeoutTimer.Stop()
@@ -354,33 +265,42 @@ func playHandler(player *player.Player) http.HandlerFunc {
 							fmt.Println("")
 						}
 						trackPath := filePath
-						id3_info := readID3(trackPath, player)
+						// id3_info := mp3.ReadID3(trackPath, player)
 						lastStartTime = setStartTime()
 						go func() {
 							// Call the function with the track path
 
-							duration := 2342.32
-							count := 232
+							// duration := 2342.32
+							// count := 232
 							// duration, count := getFramecount(trackPath)
 
 							// Print the results
-							fmt.Printf("Duration=%.2f seconds, Frame count=%d\n", duration, count)
-
-							playsCounter.WithLabelValues(currentID, id3_info.EpisodeTitle).Inc()
-							podcastCounter.WithLabelValues(id3_info.PodcastTitle).Inc()
+							// fmt.Printf("Duration=%.2f seconds, Frame count=%d\n", duration, count)
 
 							padded_offset := 0
-							if allow_play_resume {
-								playInfo := getTrackPlayInfo(currentID)
-								// fmt.Printf("getTrackPlayInfo.Duration: %f \n", playInfo.Duration)
-								frames_per_second := count / int(duration)
-								// fmt.Println(frames_per_second)
-								padded_offset = frames_per_second * int(playInfo.Duration)
-								// fmt.Println(padded_offset)
 
-							}
+							// if allow_play_resume {
+							// 	playInfo := getTrackPlayInfo(currentID)
+							// 	// fmt.Printf("getTrackPlayInfo.Duration: %f \n", playInfo.Duration)
+							// 	frames_per_second := count / int(duration)
+							// 	// fmt.Println(frames_per_second)
+							// 	padded_offset = frames_per_second * int(playInfo.Duration)
+							// 	// fmt.Println(padded_offset)
+
+							// }
 
 							playMP3(player, trackPath, int(offset)+padded_offset, currentID)
+
+							currentSong, _ := player.CurrentSong()
+							fmt.Println(currentSong.Name)
+							fmt.Println(currentSong.Album)
+							fmt.Println(currentSong.Artist)
+
+							// duration := playStats["duration"]
+							// fmt.Println("-- Duration:", playStats["duration"])
+
+							playsCounter.WithLabelValues(currentID, currentSong.Album, currentSong.Artist).Inc()
+							podcastCounter.WithLabelValues(currentSong.Name).Inc()
 							canStartTrack = false
 						}()
 						// duration, frames := getFramecount(trackPath)
