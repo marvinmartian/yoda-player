@@ -2,16 +2,17 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"sync"
 	"time"
 
 	"github.com/bogem/id3v2"
+	"github.com/marvinmartian/yoda-player/internal/player"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/tcolgate/mp3"
@@ -89,6 +90,8 @@ type SocketMessage struct {
 
 var tracks = make(map[string]Track)
 
+var mp3JsonPath string
+
 func init() {
 	// Register the Prometheus metrics.
 	prometheus.MustRegister(
@@ -97,6 +100,9 @@ func init() {
 		playErrorsCounter,
 		trackDuration,
 	)
+
+	flag.StringVar(&mp3JsonPath, "mp3File", "../mp3.json", "Path to the MP3 JSON file")
+	flag.Parse()
 }
 
 // Function to set the start time
@@ -115,7 +121,7 @@ func getFramecount(track string) (float64, int) {
 	t := 0.0
 	frameCount := 0
 
-	r, err := os.Open(track)
+	r, err := os.Open("/var/lib/mpd/music/" + track)
 	if err != nil {
 		fmt.Println(err)
 		return 0, 0
@@ -143,9 +149,11 @@ func getFramecount(track string) (float64, int) {
 	return t, frameCount
 }
 
-func readID3(filepath string) mp3Data {
+func readID3(filepath string, p *player.Player) mp3Data {
 	fmt.Println(filepath)
-	tag, err := id3v2.Open(filepath, id3v2.Options{Parse: true})
+	fmt.Println(p.CurrentSong())
+	// os.Exit(1)
+	tag, err := id3v2.Open("/var/lib/mpd/music/"+filepath, id3v2.Options{Parse: true})
 	if err != nil {
 		log.Fatal("Error while opening mp3 file: ", err)
 	}
@@ -163,42 +171,56 @@ func readID3(filepath string) mp3Data {
 	return data
 }
 
-func playMP3(filePath string, offset int, currentID string) {
-	stopMP3()
+func playMP3(player *player.Player, filePath string, offset int, currentID string) {
+	// player.St
+	stopMP3(player)
 	if isPlaying && currentID == lastPlayedID {
 		fmt.Println("This track is already playing.")
 		return
 	} else if isPlaying {
 		fmt.Println("Music is already playing, but starting new track.")
-		stopMP3()
+		stopMP3(player)
 	}
 
 	isPlaying = true
 
-	cmd := exec.Command("mpg123", "-q", "-b", "1024", fmt.Sprintf("-k %d", offset), filePath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	player.Clear()
+	player.AddToPlaylist(filePath)
 
-	go func() {
-		defer func() {
-			isPlaying = false
-		}()
-		err := cmd.Run()
-		if err != nil {
-			fmt.Println("Error playing MP3:", err)
-			playErrorsCounter.Inc()
-			// os.Exit(1)
+	player.Play()
+	if offset > 0 {
+		seekErr := player.Seek(offset)
+		if seekErr != nil {
+			fmt.Println(seekErr)
 		}
-	}()
+	}
+
+	// cmd := exec.Command("mpg123", "-q", "-b", "1024", fmt.Sprintf("-k %d", offset), filePath)
+	// cmd.Stdout = os.Stdout
+	// cmd.Stderr = os.Stderr
+
+	// go func() {
+	// 	defer func() {
+	// 		isPlaying = false
+	// 	}()
+	// 	err := cmd.Run()
+	// 	if err != nil {
+	// 		fmt.Println("Error playing MP3:", err)
+	// 		playErrorsCounter.Inc()
+	// 		// os.Exit(1)
+	// 	}
+	// }()
 }
 
-func stopMP3() {
+func stopMP3(player *player.Player) {
 	if isPlaying {
 		// If music is playing, stop it
-		err := exec.Command("pkill", "mpg123").Run()
-		if err != nil {
-			fmt.Println("Error stopping MP3:", err)
-		}
+		player.Stop()
+		player.Clear()
+		// err := exec.Command("pkill", "mpg123").Run()
+		// if err != nil {
+		// 	fmt.Println("Error stopping MP3:", err)
+		// }
 		isPlaying = false
 	}
 }
@@ -233,144 +255,149 @@ func getTrackFromID(id string) (Track, bool) {
 	}
 }
 
-func playHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Only POST requests are allowed", http.StatusMethodNotAllowed)
-		return
-	}
+func playHandler(player *player.Player) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Only POST requests are allowed", http.StatusMethodNotAllowed)
+			return
+		}
 
-	// Decode the request body into a PostData struct
-	var postData PostData
-	decoder := json.NewDecoder(r.Body)
-	err := decoder.Decode(&postData)
-	if err != nil {
-		http.Error(w, "Failed to decode request body", http.StatusInternalServerError)
-		return
-	}
+		// Decode the request body into a PostData struct
+		var postData PostData
+		decoder := json.NewDecoder(r.Body)
+		err := decoder.Decode(&postData)
+		if err != nil {
+			http.Error(w, "Failed to decode request body", http.StatusInternalServerError)
+			return
+		}
 
-	currentID := postData.ID
-	// fmt.Println("Received a POST request to /play with data:", currentID)
+		currentID := postData.ID
+		// fmt.Println("Received a POST request to /play with data:", currentID)
 
-	mu.Lock()
-	defer mu.Unlock()
+		mu.Lock()
+		defer mu.Unlock()
 
-	// Check if something is playing now
-	if isPlaying {
-		if currentID != lastPlayedID {
-			// If something is already playing, and it's not the same as the incoming ID
-			fmt.Printf("Stopping the previous track (ID: %s) and starting the new track (ID: %s)\n", lastPlayedID, currentID)
-			stopMP3()
-			lastPlayedID = currentID
-		} else {
-			// If the same ID is requested again
-			// fmt.Printf("Received the same ID again (ID: %s). Current track remains unchanged.\n", currentID)
-			durationSince := durationSinceStart(lastStartTime)
-			// fmt.Println("durationSinceStart:", durationSince.Seconds())
-			updateTrackPlayInfo(currentID, durationSince.Seconds())
-			trackDuration.WithLabelValues(currentID).Add(durationSince.Seconds())
-			// trackInfo, ok := getTrackFromID(currentID)
-			// if ok {
-			// 	length, frameCount := getFramecount(trackInfo.TrackName)
-			// 	fmt.Printf("Track: %s - Duration: %f ", trackInfo.TrackName, trackInfo.Duration)
-			// 	fmt.Printf("Frames: %d - Length: %f ", frameCount, length)
-			// }
-			// Reset the timer
-			if timeoutTimer != nil {
-				timeoutTimer.Stop()
+		// Check if something is playing now
+		if isPlaying {
+			if currentID != lastPlayedID {
+				// If something is already playing, and it's not the same as the incoming ID
+				fmt.Printf("Stopping the previous track (ID: %s) and starting the new track (ID: %s)\n", lastPlayedID, currentID)
+				stopMP3(player)
+				lastPlayedID = currentID
+			} else {
+				// If the same ID is requested again
+				// fmt.Printf("Received the same ID again (ID: %s). Current track remains unchanged.\n", currentID)
+				durationSince := durationSinceStart(lastStartTime)
+				// fmt.Println("durationSinceStart:", durationSince.Seconds())
+				updateTrackPlayInfo(currentID, durationSince.Seconds())
+				trackDuration.WithLabelValues(currentID).Add(durationSince.Seconds())
+				// trackInfo, ok := getTrackFromID(currentID)
+				// if ok {
+				// 	length, frameCount := getFramecount(trackInfo.TrackName)
+				// 	fmt.Printf("Track: %s - Duration: %f ", trackInfo.TrackName, trackInfo.Duration)
+				// 	fmt.Printf("Frames: %d - Length: %f ", frameCount, length)
+				// }
+				// Reset the timer
+				if timeoutTimer != nil {
+					timeoutTimer.Stop()
+				}
+				// Start or reset the timer
+				if canPlayTimer != nil {
+					// fmt.Println("reset canPlayTimer")
+					canPlayTimer.Reset(canPlayTimeout)
+				}
+
 			}
+		} else {
+
 			// Start or reset the timer
 			if canPlayTimer != nil {
 				// fmt.Println("reset canPlayTimer")
 				canPlayTimer.Reset(canPlayTimeout)
-			}
-
-		}
-	} else {
-
-		// Start or reset the timer
-		if canPlayTimer != nil {
-			// fmt.Println("reset canPlayTimer")
-			canPlayTimer.Reset(canPlayTimeout)
-		} else {
-			canPlayTimer = time.AfterFunc(canPlayTimeout, func() {
-				mu.Lock()
-				defer mu.Unlock()
-
-				// Allow playing again
-				fmt.Println("canPlayTimer timeout reached. Allowing play again")
-				canStartTrack = true
-				stopMP3()
-			})
-		}
-
-		if canStartTrack {
-
-			// If nothing is playing, start playing the song
-			fmt.Printf("Starting to play the track (ID: %s)\n", currentID)
-			lastPlayedID = currentID
-
-			// Start or reset the timer
-			if timeoutTimer != nil {
-				timeoutTimer.Stop()
-			}
-			timeoutTimer = time.AfterFunc(timeout, func() {
-				mu.Lock()
-				defer mu.Unlock()
-
-				// Stop playing if the timeout is reached
-				fmt.Println("Timeout reached. Stopping play...")
-				stopMP3()
-			})
-
-			// Check if the currentID exists in the JSON data
-			if data, ok := jsonData[currentID]; ok {
-				filePath, _ := data["file"].(string)
-				offset, ok := data["offset"].(float64)
-				if ok {
-					if isPlaying {
-						fmt.Println("")
-					}
-					trackPath := filePath
-					id3_info := readID3(trackPath)
-					lastStartTime = setStartTime()
-					go func() {
-						// Call the function with the track path
-						duration, count := getFramecount(trackPath)
-
-						// Print the results
-						fmt.Printf("Duration=%.2f seconds, Frame count=%d\n", duration, count)
-
-						playsCounter.WithLabelValues(currentID, id3_info.EpisodeTitle).Inc()
-						podcastCounter.WithLabelValues(id3_info.PodcastTitle).Inc()
-
-						padded_offset := 0
-						if allow_play_resume {
-							playInfo := getTrackPlayInfo(currentID)
-							// fmt.Printf("getTrackPlayInfo.Duration: %f \n", playInfo.Duration)
-							frames_per_second := count / int(duration)
-							// fmt.Println(frames_per_second)
-							padded_offset = frames_per_second * int(playInfo.Duration)
-							// fmt.Println(padded_offset)
-
-						}
-
-						playMP3(trackPath, int(offset)+padded_offset, currentID)
-						canStartTrack = false
-					}()
-					// duration, frames := getFramecount(trackPath)
-					// fmt.Printf("frames: %d - duration %f seconds", frames, duration)
-					// Increment the playsCounter metric for the current track ID.
-
-				} else {
-					fmt.Println("Offset field not found in JSON for ID:", currentID)
-				}
 			} else {
-				fmt.Println("ID not found in JSON:", currentID)
+				canPlayTimer = time.AfterFunc(canPlayTimeout, func() {
+					mu.Lock()
+					defer mu.Unlock()
+
+					// Allow playing again
+					fmt.Println("canPlayTimer timeout reached. Allowing play again")
+					canStartTrack = true
+					stopMP3(player)
+				})
+			}
+
+			if canStartTrack {
+
+				// If nothing is playing, start playing the song
+				fmt.Printf("Starting to play the track (ID: %s)\n", currentID)
+				lastPlayedID = currentID
+
+				// Start or reset the timer
+				if timeoutTimer != nil {
+					timeoutTimer.Stop()
+				}
+				timeoutTimer = time.AfterFunc(timeout, func() {
+					mu.Lock()
+					defer mu.Unlock()
+
+					// Stop playing if the timeout is reached
+					fmt.Println("Timeout reached. Stopping play...")
+					stopMP3(player)
+				})
+
+				// Check if the currentID exists in the JSON data
+				if data, ok := jsonData[currentID]; ok {
+					filePath, _ := data["file"].(string)
+					offset, ok := data["offset"].(float64)
+					if ok {
+						if isPlaying {
+							fmt.Println("")
+						}
+						trackPath := filePath
+						id3_info := readID3(trackPath, player)
+						lastStartTime = setStartTime()
+						go func() {
+							// Call the function with the track path
+
+							duration := 2342.32
+							count := 232
+							// duration, count := getFramecount(trackPath)
+
+							// Print the results
+							fmt.Printf("Duration=%.2f seconds, Frame count=%d\n", duration, count)
+
+							playsCounter.WithLabelValues(currentID, id3_info.EpisodeTitle).Inc()
+							podcastCounter.WithLabelValues(id3_info.PodcastTitle).Inc()
+
+							padded_offset := 0
+							if allow_play_resume {
+								playInfo := getTrackPlayInfo(currentID)
+								// fmt.Printf("getTrackPlayInfo.Duration: %f \n", playInfo.Duration)
+								frames_per_second := count / int(duration)
+								// fmt.Println(frames_per_second)
+								padded_offset = frames_per_second * int(playInfo.Duration)
+								// fmt.Println(padded_offset)
+
+							}
+
+							playMP3(player, trackPath, int(offset)+padded_offset, currentID)
+							canStartTrack = false
+						}()
+						// duration, frames := getFramecount(trackPath)
+						// fmt.Printf("frames: %d - duration %f seconds", frames, duration)
+						// Increment the playsCounter metric for the current track ID.
+
+					} else {
+						fmt.Println("Offset field not found in JSON for ID:", currentID)
+					}
+				} else {
+					fmt.Println("ID not found in JSON:", currentID)
+				}
 			}
 		}
-	}
 
-	fmt.Fprintln(w, "Data received and printed to console") // Respond to the client
+		fmt.Fprintln(w, "Data received and printed to console") // Respond to the client
+	}
 }
 
 func logRequest(next http.Handler) http.Handler {
@@ -384,7 +411,7 @@ func logRequest(next http.Handler) http.Handler {
 func main() {
 
 	// Load JSON data from the "mp3.json" file
-	jsonDataFile, err := os.ReadFile("../mp3.json")
+	jsonDataFile, err := os.ReadFile(mp3JsonPath)
 	if err != nil {
 		fmt.Println("Error reading JSON file:", err)
 		return
@@ -398,8 +425,23 @@ func main() {
 	// Create a router
 	router := http.NewServeMux()
 
+	mpdAddress := "localhost:6600"
+	// mpdPort := 6600
+	mpdPassword := ""
+	mpdConfig := player.MPDConfig{}
+	mpdConfig.MpdAddress = &mpdAddress
+	// mpdConfig.Port = &mpdPort
+	mpdConfig.MpdPassword = &mpdPassword
+
+	mpdPlayer, err := player.NewPlayer(&mpdConfig)
+	if err != nil {
+		fmt.Println("MPD Player Error:", err)
+	}
+
+	fmt.Println(mpdPlayer.Status())
+
 	// Define the route and handler for /play
-	router.HandleFunc("/play", playHandler)
+	router.HandleFunc("/play", playHandler(mpdPlayer))
 
 	// Define a new route for Prometheus metrics
 	router.Handle("/metrics", promhttp.Handler())
