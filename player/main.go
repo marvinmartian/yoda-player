@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strconv"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/marvinmartian/yoda-player/internal/player"
@@ -98,7 +99,7 @@ func init() {
 // Function to set the start time
 func setStartTime() time.Time {
 	startTime := time.Now()
-	fmt.Println("Start time set:", startTime)
+	// fmt.Println("Start time set:", startTime)
 	return startTime
 }
 
@@ -181,7 +182,7 @@ func playHandler(player *player.Player) http.HandlerFunc {
 
 		// Check if something is playing now
 		if isPlaying {
-			playStats, _ := player.Status()
+			// playStats, _ := player.Status()
 			if currentID != lastPlayedID {
 				// If something is already playing, and it's not the same as the incoming ID
 				fmt.Printf("Stopping the previous track (ID: %s) and starting the new track (ID: %s)\n", lastPlayedID, currentID)
@@ -191,19 +192,19 @@ func playHandler(player *player.Player) http.HandlerFunc {
 				// If the same ID is requested again
 				// fmt.Printf("Received the same ID again (ID: %s). Current track remains unchanged.\n", currentID)
 
-				elapsedStr, ok := playStats["elapsed"]
-				elapsed := 0.0
-				if ok {
-					elapsed, err = strconv.ParseFloat(elapsedStr, 64)
-					if err != nil {
-						fmt.Println("Error converting elapsed to float64:", err)
-						return
-					}
-					fmt.Printf("Elapsed: %f\n", elapsed)
-				} else {
-					fmt.Println("Elapsed not found")
-					fmt.Println(playStats)
-				}
+				// elapsedStr, ok := playStats["elapsed"]
+				// elapsed := 0.0
+				// if ok {
+				// 	elapsed, err = strconv.ParseFloat(elapsedStr, 64)
+				// 	if err != nil {
+				// 		// fmt.Println("Error converting elapsed to float64:", err)
+				// 		return
+				// 	}
+				// 	// fmt.Printf("Elapsed: %f\n", elapsed)
+				// } else {
+				// 	fmt.Println("Elapsed not found")
+				// 	fmt.Println(playStats)
+				// }
 				durationSince := durationSinceStart(lastStartTime)
 				// fmt.Println("durationSinceStart:", durationSince.Seconds())
 				updateTrackPlayInfo(currentID, durationSince.Seconds())
@@ -292,9 +293,9 @@ func playHandler(player *player.Player) http.HandlerFunc {
 							playMP3(player, trackPath, int(offset)+padded_offset, currentID)
 
 							currentSong, _ := player.CurrentSong()
-							fmt.Println(currentSong.Name)
-							fmt.Println(currentSong.Album)
-							fmt.Println(currentSong.Artist)
+							// fmt.Println(currentSong.Name)
+							// fmt.Println(currentSong.Album)
+							// fmt.Println(currentSong.Artist)
 
 							// duration := playStats["duration"]
 							// fmt.Println("-- Duration:", playStats["duration"])
@@ -357,8 +358,14 @@ func main() {
 	if err != nil {
 		fmt.Println("MPD Player Error:", err)
 	}
-
-	fmt.Println(mpdPlayer.Status())
+	// Defer the call to mpdPlayer.Stop() to ensure it's executed on exit
+	defer func() {
+		fmt.Println("Exiting application")
+		stopMP3(mpdPlayer)
+		// if err := mpdPlayer.Stop(); err != nil {
+		// 	fmt.Println("Error stopping MPD Player:", err)
+		// }
+	}()
 
 	// Define the route and handler for /play
 	router.HandleFunc("/play", playHandler(mpdPlayer))
@@ -371,9 +378,22 @@ func main() {
 
 	// Start the web server on port 3001
 	fmt.Println("Listening on port 3001...")
-	err = http.ListenAndServe(":3001", chain)
-	if err != nil {
-		fmt.Println("Error:", err)
-	}
+	// Create a channel to listen for interrupt signals (Ctrl+C)
+	stopChan := make(chan os.Signal, 1)
+	signal.Notify(stopChan, os.Interrupt, syscall.SIGTERM)
+
+	// Start the server in a goroutine
+	go func() {
+		if err := http.ListenAndServe(":3001", chain); err != nil {
+			fmt.Println("Error:", err)
+		}
+	}()
+
+	// Wait for an interrupt signal
+	<-stopChan
+	// err = http.ListenAndServe(":3001", chain)
+	// if err != nil {
+	// 	fmt.Println("Error:", err)
+	// }
 
 }
