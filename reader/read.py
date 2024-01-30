@@ -15,7 +15,7 @@ reader = SimpleMFRC522()
 
 HISTORY_DEPTH = 4
 INTENT_RATE = 3
-YODA_URL = 'http://yoda:3001/play'
+YODA_URL = 'http://localhost:3001/play'
 YODA_TIMEOUT_RETRY = 5
 tagHistory = {}
 
